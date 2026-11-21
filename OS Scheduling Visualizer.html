@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>OS Scheduling Visualizer</title>
+<style>
+:root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);
+--bg:#fafaf7;--sf:#fff;--tx:#1d1d1b;--mu:#666;--bd:#d9d8d2;--ac:#2a6fdb;--ac2:#d9480f;--ok:#2b8a3e;color-scheme:light}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#171716;--sf:#222221;--tx:#ececE8;--mu:#a3a29c;--bd:#3a3a37;--ac:#6ea2f5;--ac2:#ff8f5c;--ok:#69c47d;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#171716;--sf:#222221;--tx:#ececE8;--mu:#a3a29c;--bd:#3a3a37;--ac:#6ea2f5;--ac2:#ff8f5c;--ok:#69c47d;color-scheme:dark}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:920px;margin:0 auto;padding:16px}
+h1{font-size:22px;margin:4px 0}h2{font-size:16px;margin:18px 0 8px}
+p.sub{color:var(--mu);margin:0 0 12px}
+.tabs{display:flex;gap:6px;margin:12px 0}
+.tabs button{flex:1}
+button,input,select,textarea{font:inherit;color:var(--tx);background:var(--sf);border:1px solid var(--bd);border-radius:8px;padding:7px 10px}
+button{cursor:pointer}button:hover{border-color:var(--ac)}
+button.on{background:var(--ac);color:#fff;border-color:var(--ac)}
+.card{background:var(--sf);border:1px solid var(--bd);border-radius:12px;padding:14px;margin-bottom:14px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px}
+label{display:block;font-size:13px;color:var(--mu)}label input,label select,label textarea{width:100%;margin-top:3px}
+textarea{font-family:ui-monospace,Menlo,monospace}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:10px}
+.err{color:#c92a2a;font-size:14px;margin-top:8px;min-height:1em}
+.scroll{overflow-x:auto}
+.stat{display:flex;flex-wrap:wrap;gap:18px;margin:8px 0}.stat b{font-size:20px}
+.info{font-size:14px;color:var(--mu);min-height:1.4em}
+table{border-collapse:collapse;width:100%;font-size:14px}th,td{border-bottom:1px solid var(--bd);padding:5px 8px;text-align:right}th:first-child,td:first-child{text-align:left}
+.bar{display:flex;align-items:center;gap:8px;margin:5px 0;font-size:14px}.bar span.n{width:64px}.bar div{height:20px;background:var(--ac);border-radius:4px;min-width:2px}.bar.best div{background:var(--ok)}
+.gantt{display:flex;min-height:54px;padding-bottom:4px}
+.seg{flex:none;height:34px;color:#fff;font-size:13px;display:flex;align-items:center;justify-content:center;border-right:1px solid var(--bg);position:relative;transition:width .25s}
+.seg i{position:absolute;top:36px;left:-3px;font-style:normal;font-size:11px;color:var(--mu)}
+.seg.idle{background:var(--bd);color:var(--mu)}
+.hide{display:none}
+svg text{fill:var(--mu);font-size:11px}
+</style>
+</head>
+<body>
+<main>
+<h1>OS Scheduling Visualizer</h1>
+<p class="sub">Step through disk and CPU scheduling algorithms, or auto-play them, and compare the results.</p>
+<div class="tabs"><button id="tabD" class="on">Disk scheduling</button><button id="tabC">CPU scheduling</button></div>
+
+<section id="disk">
+<div class="card">
+<div class="grid">
+<label>Disk size (cylinders)<input id="dsize" type="number" value="200"></label>
+<label>Initial head position<input id="dhead" type="number" value="50"></label>
+<label>Direction (SCAN, C-SCAN, LOOK)<select id="ddir"><option value="up">Towards higher cylinders</option><option value="down">Towards lower cylinders</option></select></label>
+<label>Algorithm<select id="dalg"><option>FCFS</option><option>SSTF</option><option>SCAN</option><option>C-SCAN</option><option>LOOK</option></select></label>
+</div>
+<label style="margin-top:10px">Request queue (comma or space separated)<input id="dreq" value="82, 170, 43, 140, 24, 16, 190"></label>
+<div class="row"><button id="dgo" class="on">Run</button><button id="dprev">Previous</button><button id="dnext">Next</button><button id="dplay">Auto-play</button><button id="dreset">Reset</button></div>
+<div class="err" id="derr"></div>
+</div>
+<div class="card" id="dout">
+<div class="stat"><div>Total head movement<br><b id="dtotal">–</b></div><div>Step<br><b id="dstep">–</b></div></div>
+<div class="info" id="dinfo"></div>
+<div class="scroll"><svg id="dsvg" width="100%" role="img" aria-label="Seek graph"></svg></div>
+<p><b>Service sequence:</b> <span id="dseq"></span></p>
+</div>
+<div class="card"><h2 style="margin-top:0">Comparison: total head movement (same input)</h2><div id="dcmp"></div>
+<p class="info">SCAN and C-SCAN travel to the disk ends. C-SCAN’s return jump is counted as head movement.</p></div>
+</section>
+
+<section id="cpu" class="hide">
+<div class="card">
+<div class="grid">
+<label>Algorithm<select id="calg"><option value="FCFS">FCFS</option><option value="SJF">SJF (non-preemptive)</option><option value="SRTF">SRTF</option><option value="Priority">Priority (lower number = higher)</option><option value="RR">Round Robin</option></select></label>
+<label>Time quantum (Round Robin)<input id="cq" type="number" value="3" min="1"></label>
+</div>
+<label style="margin-top:10px">Processes, one per line: ID arrival burst priority<textarea id="cproc" rows="5">P1 0 8 3
+P2 1 4 1
+P3 2 9 4
+P4 3 5 2</textarea></label>
+<div class="row"><button id="cgo" class="on">Run</button><button id="cprev">Previous</button><button id="cnext">Next</button><button id="cplay">Auto-play</button><button id="creset">Reset</button></div>
+<div class="err" id="cerr"></div>
+</div>
+<div class="card">
+<div class="info" id="cinfo"></div>
+<div class="scroll"><div class="gantt" id="gantt"></div></div>
+<div class="scroll"><table id="ctable"></table></div>
+</div>
+</section>
+</main>
+
+<script>
+const $=id=>document.getElementById(id);
+function player(btns,max,render){
+  const s={i:0,t:null,max:0,render};
+  s.set=(m)=>{s.stop();s.max=m;s.i=0;render(0)};
+  s.go=d=>{s.i=Math.max(0,Math.min(s.max,s.i+d));render(s.i)};
+  s.stop=()=>{if(s.t){clearInterval(s.t);s.t=null}btns.play.textContent="Auto-play"};
+  btns.next.onclick=()=>{s.stop();s.go(1)};
+  btns.prev.onclick=()=>{s.stop();s.go(-1)};
+  btns.reset.onclick=()=>{s.stop();s.i=0;render(0)};
+  btns.play.onclick=()=>{
+    if(s.t){s.stop();return}
+    if(s.i>=s.max)s.i=0;
+    btns.play.textContent="Pause";
+    s.t=setInterval(()=>{if(s.i>=s.max){s.stop();return}s.go(1)},650);
+  };
+  return s;
+}
+
+/* ---------- Disk scheduling ---------- */
+function diskPath(alg,head,req,size,dir){
+  const P=(c,svc=true)=>({c,svc});
+  const asc=req.filter(x=>x>=head).sort((a,b)=>a-b);
+  const desc=req.filter(x=>x<head).sort((a,b)=>b-a);
+  const lowAsc=[...desc].reverse(), upDesc=[...asc].reverse();
+  let p=[P(head,false)];
+  if(alg==="FCFS")req.forEach(r=>p.push(P(r)));
+  else if(alg==="SSTF"){
+    let left=[...req],cur=head;
+    while(left.length){
+      let bi=0;
+      left.forEach((r,i)=>{if(Math.abs(r-cur)<Math.abs(left[bi]-cur))bi=i});
+      cur=left.splice(bi,1)[0];p.push(P(cur));
+    }
+  }
+  else if(alg==="SCAN"){
+    if(dir==="up")p.push(...asc.map(x=>P(x)),P(size-1,false),...desc.map(x=>P(x)));
+    else p.push(...desc.map(x=>P(x)),P(0,false),...asc.map(x=>P(x)));
+  }
+  else if(alg==="C-SCAN"){
+    if(dir==="up")p.push(...asc.map(x=>P(x)),P(size-1,false),P(0,false),...lowAsc.map(x=>P(x)));
+    else p.push(...desc.map(x=>P(x)),P(0,false),P(size-1,false),...upDesc.map(x=>P(x)));
+  }
+  else if(alg==="LOOK"){
+    if(dir==="up")p.push(...asc.map(x=>P(x)),...desc.map(x=>P(x)));
+    else p.push(...desc.map(x=>P(x)),...asc.map(x=>P(x)));
+  }
+  let total=0;for(let i=1;i<p.length;i++)total+=Math.abs(p[i].c-p[i-1].c);
+  return {p,total};
+}
+let D=null;
+function parseDisk(){
+  const size=Number($("dsize").value),head=Number($("dhead").value);
+  const raw=$("dreq").value.trim().split(/[\s,]+/).filter(Boolean);
+  if(!Number.isInteger(size)||size<2)return "Disk size must be a whole number of at least 2.";
+  if(!Number.isInteger(head)||head<0||head>size-1)return `Head position must be a whole number from 0 to ${size-1}.`;
+  if(!raw.length)return "Enter at least one request.";
+  const req=raw.map(Number);
+  const bad=raw.find((x,i)=>!Number.isInteger(req[i])||req[i]<0||req[i]>size-1);
+  if(bad!==undefined)return `Invalid request “${bad}”. Requests must be whole numbers from 0 to ${size-1}.`;
+  return {size,head,req,dir:$("ddir").value};
+}
+function renderDisk(i){
+  if(!D)return;
+  const {p,size}=D.cur,n=p.length-1;
+  $("dstep").textContent=`${i} / ${n}`;
+  const t=p.slice(0,i+1);let moved=0;
+  for(let k=1;k<t.length;k++)moved+=Math.abs(t[k].c-t[k-1].c);
+  $("dinfo").textContent=i===0?`Head starts at cylinder ${p[0].c}. Press Next or Auto-play.`:
+    `Head moves ${p[i-1].c} → ${p[i].c} (${Math.abs(p[i].c-p[i-1].c)} cylinders). Movement so far: ${moved}.`+(p[i].svc?"":" (sweep to disk end, no request here)");
+  const W=640,rowH=26,H=50+rowH*n,x=c=>30+c/(size-1)*(W-60),y=k=>34+k*rowH;
+  let s=`<svg viewBox="0 0 ${W} ${H}" style="min-width:560px"></svg>`;
+  let g=`<line x1="30" y1="22" x2="${W-30}" y2="22" stroke="currentColor" opacity=".3"/>`;
+  [0,Math.round((size-1)/2),size-1].forEach(c=>{g+=`<text x="${x(c)}" y="14" text-anchor="middle">${c}</text>`});
+  for(let k=1;k<=i;k++)g+=`<line x1="${x(p[k-1].c)}" y1="${y(k-1)}" x2="${x(p[k].c)}" y2="${y(k)}" stroke="var(--ac)" stroke-width="2"/>`;
+  for(let k=0;k<=i;k++){
+    const cur=k===i;
+    g+=`<circle cx="${x(p[k].c)}" cy="${y(k)}" r="${cur?6:4}" fill="${p[k].svc?(cur?"var(--ac2)":"var(--ac)"):"var(--sf)"}" stroke="${cur?"var(--ac2)":"var(--ac)"}" stroke-width="2"/>`;
+    g+=`<text x="${x(p[k].c)+8}" y="${y(k)+4}">${p[k].c}</text>`;
+  }
+  const el=$("dsvg");el.setAttribute("viewBox",`0 0 ${W} ${H}`);el.style.minWidth="560px";el.style.height=H+"px";el.innerHTML=g;
+  $("dseq").textContent=p.slice(0,i+1).filter((q,k)=>k>0&&q.svc).map(q=>q.c).join(", ")||"–";
+}
+const dp=player({next:$("dnext"),prev:$("dprev"),play:$("dplay"),reset:$("dreset")},0,renderDisk);
+function runDisk(){
+  const r=parseDisk();
+  if(typeof r==="string"){$("derr").textContent=r;return}
+  $("derr").textContent="";
+  const all={};
+  ["FCFS","SSTF","SCAN","C-SCAN","LOOK"].forEach(a=>all[a]=diskPath(a,r.head,r.req,r.size,r.dir));
+  const alg=$("dalg").value,cur=all[alg];
+  D={cur:{p:cur.p,size:r.size}};
+  $("dtotal").textContent=cur.total;
+  const mx=Math.max(...Object.values(all).map(v=>v.total)),mn=Math.min(...Object.values(all).map(v=>v.total));
+  $("dcmp").innerHTML=Object.entries(all).map(([a,v])=>`<div class="bar ${v.total===mn?"best":""}"><span class="n">${a}</span><div style="width:${Math.max(1,v.total/mx*70)}%"></div><span>${v.total}</span></div>`).join("");
+  dp.set(cur.p.length-1);
+}
+$("dgo").onclick=runDisk;$("dalg").onchange=runDisk;$("ddir").onchange=runDisk;
+
+/* ---------- CPU scheduling ---------- */
+function simCPU(procs,algo,q){
+  const ps=procs.map(p=>({...p,rem:p.bt,ct:0}));
+  const n=ps.length,added=new Set(),queue=[],tl=[];
+  let t=0,done=0,cur=null,ql=0;
+  const arrive=()=>ps.forEach(p=>{if(p.at<=t&&!added.has(p.id)){added.add(p.id);queue.push(p)}});
+  const key=p=>algo==="SJF"?p.bt:algo==="SRTF"?p.rem:algo==="Priority"?p.pr:0;
+  while(done<n){
+    arrive();
+    if(algo==="RR"){if(!cur){cur=queue.shift()||null;ql=q}}
+    else if(!cur||algo==="SRTF"){
+      cur=null;
+      queue.forEach(p=>{if(!cur||key(p)<key(cur)||(key(p)===key(cur)&&p.at<cur.at))cur=p});
+    }
+    if(!cur){tl.push(null);t++;continue}
+    tl.push(cur.id);cur.rem--;t++;
+    if(cur.rem===0){
+      cur.ct=t;done++;
+      const k=queue.indexOf(cur);if(k>=0)queue.splice(k,1);
+      cur=null;
+    }else if(algo==="RR"){
+      ql--;
+      if(ql===0){arrive();queue.push(cur);cur=null}
+    }
+  }
+  ps.forEach(p=>{p.tat=p.ct-p.at;p.wt=p.tat-p.bt});
+  return {ps,tl};
+}
+function hue(id,ids){return `hsl(${ids.indexOf(id)*67+210} 55% 42%)`}
+let C=null;
+function renderCPU(i){
+  if(!C)return;
+  const {tl,ps}=C,ids=ps.map(p=>p.id);
+  $("cinfo").textContent=i===0?"Time 0. Press Next or Auto-play to advance one time unit at a time.":
+    `Time ${i}: ${tl[i-1]?tl[i-1]+" ran during ["+(i-1)+", "+i+")":"CPU idle during ["+(i-1)+", "+i+")"}.`;
+  let segs=[];
+  tl.slice(0,i).forEach((id,k)=>{const l=segs[segs.length-1];if(l&&l.id===id)l.len++;else segs.push({id,len:1,start:k})});
+  $("gantt").innerHTML=segs.map(s=>`<div class="seg ${s.id?"":"idle"}" style="width:${s.len*30}px;${s.id?"background:"+hue(s.id,ids):""}">${s.id||"idle"}<i>${s.start}</i></div>`).join("")+
+    (i>0?`<div style="position:relative;width:1px"><i style="position:absolute;top:36px;left:-3px;font-style:normal;font-size:11px;color:var(--mu)">${i}</i></div>`:"");
+  const fin=i>=C.max;
+  let avgW=ps.reduce((a,p)=>a+p.wt,0)/ps.length,avgT=ps.reduce((a,p)=>a+p.tat,0)/ps.length;
+  $("ctable").innerHTML=`<tr><th>Process</th><th>Arrival</th><th>Burst</th><th>Priority</th><th>Completion</th><th>Turnaround</th><th>Waiting</th></tr>`+
+    ps.map(p=>`<tr><td>${p.id}</td><td>${p.at}</td><td>${p.bt}</td><td>${p.pr}</td>`+(p.ct<=i?`<td>${p.ct}</td><td>${p.tat}</td><td>${p.wt}</td>`:`<td>–</td><td>–</td><td>–</td>`)+`</tr>`).join("")+
+    (fin?`<tr><td><b>Average</b></td><td></td><td></td><td></td><td></td><td><b>${avgT.toFixed(2)}</b></td><td><b>${avgW.toFixed(2)}</b></td></tr>`:"");
+}
+const cp=player({next:$("cnext"),prev:$("cprev"),play:$("cplay"),reset:$("creset")},0,renderCPU);
+function runCPU(){
+  const lines=$("cproc").value.trim().split("\n").map(l=>l.trim()).filter(Boolean);
+  const q=Number($("cq").value),ids=new Set(),procs=[];
+  if(!lines.length){$("cerr").textContent="Enter at least one process.";return}
+  if($("calg").value==="RR"&&(!Number.isInteger(q)||q<1)){$("cerr").textContent="Time quantum must be a whole number of at least 1.";return}
+  for(const [k,l] of lines.entries()){
+    const f=l.split(/[\s,]+/);
+    const [id,at,bt,pr]=[f[0],Number(f[1]),Number(f[2]),f[3]===undefined?0:Number(f[3])];
+    if(f.length<3||!Number.isInteger(at)||at<0||!Number.isInteger(bt)||bt<1||!Number.isInteger(pr)){
+      $("cerr").textContent=`Line ${k+1}: use “ID arrival burst priority” with whole numbers (arrival ≥ 0, burst ≥ 1).`;return}
+    if(ids.has(id)){$("cerr").textContent=`Line ${k+1}: duplicate process ID “${id}”.`;return}
+    ids.add(id);procs.push({id,at,bt,pr});
+  }
+  $("cerr").textContent="";
+  C=simCPU(procs,$("calg").value,q);C.max=C.tl.length;
+  cp.set(C.max);
+}
+$("cgo").onclick=runCPU;$("calg").onchange=runCPU;
+
+/* ---------- Tabs ---------- */
+function tab(d){
+  $("disk").classList.toggle("hide",!d);$("cpu").classList.toggle("hide",d);
+  $("tabD").classList.toggle("on",d);$("tabC").classList.toggle("on",!d);
+  dp.stop();cp.stop();
+}
+$("tabD").onclick=()=>tab(true);$("tabC").onclick=()=>tab(false);
+runDisk();runCPU();
+</script>
+</body>
+</html>
